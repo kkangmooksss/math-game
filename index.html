@@ -664,7 +664,9 @@ const FIRE_CLOUD={ auth:null, rtdb:null,
   body:(nick,st)=>({nick,char:st.profile?.char||null,state:JSON.stringify(st),updatedAt:st.updatedAt||Date.now()}),
   async create(nick,pin,st){ let cred;
     try{cred=await this.auth.createUserWithEmailAndPassword(this.email(nick),this.pw(pin))}
-    catch(err){ if(err&&err.code==="auth/email-already-in-use") return {err:"taken"}; throw err }
+    catch(err){ if(!(err&&err.code==="auth/email-already-in-use")) throw err;
+      try{cred=await this.auth.signInWithEmailAndPassword(this.email(nick),this.pw(pin))}catch(x){return {err:"taken"}}
+      const old=await this.ref(cred.user.uid).get(); if(old.exists()) return {err:"taken"} }
     await this.ref(cred.user.uid).set(this.body(nick,st)); return {ext:{uid:cred.user.uid,pw:this.pw(pin)}} },
   async login(nick,pin){ let cred;
     try{cred=await this.auth.signInWithEmailAndPassword(this.email(nick),this.pw(pin))}
