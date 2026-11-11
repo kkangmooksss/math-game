@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body>
@@ -607,7 +610,7 @@ try{const d=JSON.parse(localStorage.getItem(DKEY)||"null"); if(d&&Array.isArray(
 function saveDev(){try{localStorage.setItem(DKEY,JSON.stringify(DEV))}catch(e){}}
 let LEGACY=null;
 try{const o=JSON.parse(localStorage.getItem(KEY)||"null"); if(o&&o.profile&&!o.migratedTo) LEGACY=o}catch(e){}
-let ACC=null, GATE="welcome", DB=null, cloudRO=false, gateMsg="", busy=false;
+let ACC=null, GATE="welcome", cloudRO=false, gateMsg="", busy=false;
 const entryOf=k=>DEV.accts.find(a=>a.key===k);
 const keyOf=nick=>"n"+Array.from(new TextEncoder().encode(nick.trim().toLowerCase())).map(b=>b.toString(16).padStart(2,"0")).join("");
 function hp(salt,pin){let h1=0xdeadbeef,h2=0x41c6ce57;const str=salt+":"+pin;
@@ -621,65 +624,126 @@ function useState(obj){S=Object.assign(FRESH(),JSON.parse(JSON.stringify(obj||{}
   UIDS.forEach(id=>{const pr=S.prog[id];if(pr)[1,2,3].forEach(l=>{if(pr.best[l]>=passOf(l,id))S.cleared[UKEY(l,id)]=1})})}
 function save(){ if(!ACC) return; if(S.attempts.length>300) S.attempts=S.attempts.slice(-300);
   S.updatedAt=Date.now(); try{localStorage.setItem(ckey(ACC),JSON.stringify(S))}catch(e){} queuePush() }
-const docOf=k=>DB.doc("accounts/"+k);
-const fullDoc=(e,st)=>({nick:e.nick,salt:e.salt,hash:e.hash,char:st.profile?.char||e.char||null,state:JSON.parse(JSON.stringify(st)),updatedAt:st.updatedAt||Date.now()});
-let pushT=null,pushing=false,pushAgain=false,syncState="local";
-function queuePush(){const e=entryOf(ACC); if(!DB||!e||!e.cloud||cloudRO) return; clearTimeout(pushT); pushT=setTimeout(push,1200)}
-async function push(){ if(pushing){pushAgain=true;return} const k=ACC,e=entryOf(k); if(!k||!e||!DB) return; pushing=true;
-  try{await docOf(k).set(fullDoc(e,S)); syncState="cloud"}
-  catch(err){ if(err&&err.code==="invalid_argument"){cloudRO=true;syncState="local"} else if(err&&err.code==="unavailable"){setTimeout(queuePush,4000)} }
+/* ---------- 클라우드 저장소: Claude 안에서는 Claude 저장소, 새 주소에서는 Firebase ---------- */
+const APP_URL="https://kkangmooksss.github.io/math-game/";
+const FB_CONFIG={apiKey:"AIzaSyA_qleMkMGBXtjdMN5vBAAuV_Q0KubYeW4",authDomain:"math-game-b6589.firebaseapp.com",databaseURL:"https://math-game-b6589-default-rtdb.firebaseio.com",projectId:"math-game-b6589",storageBucket:"math-game-b6589.firebasestorage.app",messagingSenderId:"666357596106",appId:"1:666357596106:web:9aeb3f5ac38be4304e1933"};
+const IN_CLAUDE=!!(window.claude&&window.claude.use);
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+const b64u={enc:s=>{const b=new TextEncoder().encode(s);let t="";for(let i=0;i<b.length;i+=8192)t+=String.fromCharCode.apply(null,b.subarray(i,i+8192));return btoa(t).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")},
+  dec:s=>{s=s.replace(/-/g,"+").replace(/_/g,"/");while(s.length%4)s+="=";const t=atob(s);return new TextDecoder().decode(Uint8Array.from(t,c=>c.charCodeAt(0)))}};
+let IMPORTED=false;
+if(!IN_CLAUDE){ try{ if(location.hash.indexOf("#import-")===0){ const o=JSON.parse(b64u.dec(location.hash.slice(8)));
+  if(o&&o.profile){LEGACY=o;IMPORTED=true} history.replaceState(null,"",location.pathname+location.search) } }catch(e){} }
+function exportLink(){const st=JSON.parse(JSON.stringify(S));st.attempts=(st.attempts||[]).slice(-80);delete st.cfg.pin;return APP_URL+"#import-"+b64u.enc(JSON.stringify(st))}
+
+const CLAUDE_CLOUD={ db:null,
+  ready:(()=>{let p=null;return()=>p||(p=(async()=>{ try{ const c=window.claude; if(!c||!c.use) return false;
+    const db=await Promise.race([c.use("db"),wait(10000).then(()=>null)]); if(!db) return false; CLAUDE_CLOUD.db=db;
+    try{const u=await Promise.race([c.use("user"),wait(4000).then(()=>null)]); if(u){const w=await u.can("data.write"); if(w===false) cloudRO=true}}catch(e){}
+    return true }catch(e){return false} })())})(),
+  doc:k=>CLAUDE_CLOUD.db.doc("accounts/"+k),
+  body:(e,st)=>({nick:e.nick,salt:e.salt,hash:e.hash,char:st.profile?.char||e.char||null,state:JSON.parse(JSON.stringify(st)),updatedAt:st.updatedAt||Date.now()}),
+  async create(nick,pin,st){ const key=keyOf(nick), d=await this.doc(key).get(); if(d.exists) return {err:"taken"};
+    const ext={salt:newSalt()}; ext.hash=hp(ext.salt,pin); await this.doc(key).set(this.body({nick,...ext},st)); return {ext} },
+  async login(nick,pin){ const d=await this.doc(keyOf(nick)).get(); if(!d.exists) return {err:"none"}; const b=d.data();
+    if(hp(b.salt,pin)!==b.hash) return {err:"pw"}; return {ext:{salt:b.salt,hash:b.hash},nick:b.nick,char:b.char,state:b.state,updatedAt:b.updatedAt} },
+  async get(e){ const d=await this.doc(e.key).get(); if(!d.exists) return {exists:false}; const b=d.data();
+    if(b.hash!==e.hash) return {exists:true,mismatch:true,ext:{salt:b.salt,hash:b.hash}}; return {exists:true,state:b.state,updatedAt:b.updatedAt||0} },
+  async put(e,st){ await this.doc(e.key).set(this.body(e,st)) },
+  async setPin(e,pin){ e.salt=newSalt(); e.hash=hp(e.salt,pin) }
+};
+
+const FIRE_CLOUD={ auth:null, rtdb:null,
+  ready:(()=>{let p=null;return()=>p||(p=(async()=>{ try{ const fb=window.firebase; if(!fb) return false;
+    if(!fb.apps.length) fb.initializeApp(FB_CONFIG); FIRE_CLOUD.auth=fb.auth(); FIRE_CLOUD.rtdb=fb.database(); return true }catch(e){return false} })())})(),
+  email:nick=>keyOf(nick)+"@users.math-game-b6589.firebaseapp.com",
+  pw:pin=>"mg-"+pin+"-math",
+  ref(uid){return this.rtdb.ref("accounts/"+uid)},
+  async ensure(e){ const u=this.auth.currentUser; if(u&&u.uid===e.uid) return;
+    try{await this.auth.signInWithEmailAndPassword(this.email(e.nick),e.pw)}catch(err){throw {code:"auth"}} },
+  body:(nick,st)=>({nick,char:st.profile?.char||null,state:JSON.stringify(st),updatedAt:st.updatedAt||Date.now()}),
+  async create(nick,pin,st){ let cred;
+    try{cred=await this.auth.createUserWithEmailAndPassword(this.email(nick),this.pw(pin))}
+    catch(err){ if(err&&err.code==="auth/email-already-in-use") return {err:"taken"}; throw err }
+    await this.ref(cred.user.uid).set(this.body(nick,st)); return {ext:{uid:cred.user.uid,pw:this.pw(pin)}} },
+  async login(nick,pin){ let cred;
+    try{cred=await this.auth.signInWithEmailAndPassword(this.email(nick),this.pw(pin))}
+    catch(err){ const c=err&&err.code||""; if(/network/.test(c)) throw err; return {err:/user-not-found/.test(c)?"none":"pw"} }
+    const snap=await this.ref(cred.user.uid).get(), b=snap.val()||{};
+    return {ext:{uid:cred.user.uid,pw:this.pw(pin)},nick:b.nick||nick,char:b.char||null,state:b.state?JSON.parse(b.state):null,updatedAt:b.updatedAt||0} },
+  async get(e){ await this.ensure(e); const snap=await this.ref(e.uid).get(); if(!snap.exists()) return {exists:false};
+    const b=snap.val(); return {exists:true,state:JSON.parse(b.state),updatedAt:b.updatedAt||0} },
+  async put(e,st){ await this.ensure(e);
+    try{ await this.ref(e.uid).set(this.body(e.nick,st)) }
+    catch(err){ if(!/permission/i.test(String(err&&(err.code||err.message)))) throw err;
+      try{await this.auth.signInWithEmailAndPassword(this.email(e.nick),e.pw)}catch(x){throw {code:"auth"}}
+      await this.ref(e.uid).set(this.body(e.nick,st)) } },
+  async setPin(e,pin){ await this.ensure(e); await this.auth.currentUser.updatePassword(this.pw(pin)); e.pw=this.pw(pin) }
+};
+const CLOUD=IN_CLAUDE?CLAUDE_CLOUD:FIRE_CLOUD;
+let CLOUD_OK=null;
+async function cloudReady(){ if(CLOUD_OK!==null) return CLOUD_OK; gateMsg="연결하는 중이에요…"; if(!ACC) render(); CLOUD_OK=await CLOUD.ready(); gateMsg=""; return CLOUD_OK }
+
+let pushT=null,pushing=false,pushAgain=false;
+function queuePush(){const e=entryOf(ACC); if(!CLOUD_OK||!e||!e.cloud||cloudRO) return; clearTimeout(pushT); pushT=setTimeout(push,1200)}
+async function push(){ if(pushing){pushAgain=true;return} const k=ACC,e=entryOf(k); if(!k||!e||!e.cloud||!CLOUD_OK) return; pushing=true;
+  try{await CLOUD.put(e,S); e.authFail=false}
+  catch(err){ const c=err&&err.code; if(c==="invalid_argument"){cloudRO=true} else if(c==="auth"){e.authFail=true;saveDev()} else setTimeout(queuePush,5000); refreshNote() }
   pushing=false; if(pushAgain){pushAgain=false;push()} }
-async function pull(){ const k=ACC,e=entryOf(k); if(!DB||!k||!e) return;
-  try{ const d=await docOf(k).get(); if(k!==ACC) return;
-    if(!d.exists){ if(cloudRO) return; await docOf(k).set(fullDoc(e,S)); e.cloud=true; e.clash=false; saveDev(); syncState="cloud"; refreshNote(); return }
-    const b=d.data(); if(b.hash!==e.hash){ if(!e.cloud){e.clash=true;saveDev();syncState="clash";refreshNote()} else { /* 다른 기기에서 비밀번호를 바꿨어요 */ e.salt=b.salt;e.hash=b.hash;saveDev() } if(!e.cloud) return }
-    e.cloud=true; e.clash=false; saveDev(); syncState=cloudRO?"local":"cloud";
-    if((b.updatedAt||0)>(S.updatedAt||0)){ if(view.screen==="quiz"||view.screen==="result"){pendingPull=b;return} adopt(b) }
-    else if((S.updatedAt||0)>(b.updatedAt||0)) queuePush();
-    refreshNote();
-  }catch(err){} }
+async function pull(){ const k=ACC,e=entryOf(k); if(!CLOUD_OK||!k||!e) return;
+  try{
+    if(!e.cloud){ if(cloudRO||!e.lpin) return; const r=await CLOUD.create(e.nick,e.lpin,S); if(k!==ACC) return;
+      if(r.err==="taken"){e.clash=true} else {Object.assign(e,r.ext); e.cloud=true; e.clash=false; delete e.lpin} saveDev(); refreshNote(); return }
+    const r=await CLOUD.get(e); if(k!==ACC) return; e.authFail=false;
+    if(!r.exists){ if(!cloudRO) await CLOUD.put(e,S); saveDev(); refreshNote(); return }
+    if(r.mismatch){ Object.assign(e,r.ext); saveDev(); return pull() }
+    if((r.updatedAt||0)>(S.updatedAt||0)){ if(view.screen==="quiz"||view.screen==="result"){pendingPull=r;return} adopt(r) }
+    else if((S.updatedAt||0)>(r.updatedAt||0)) queuePush();
+    saveDev(); refreshNote();
+  }catch(err){ if(err&&err.code==="auth"){e.authFail=true;saveDev();refreshNote()} } }
 let pendingPull=null;
 function adopt(b){useState(b.state);try{localStorage.setItem(ckey(ACC),JSON.stringify(S))}catch(e){};render()}
 function refreshNote(){const n=document.getElementById("syncNote"); if(n) n.textContent=syncText()}
 function syncText(){const e=entryOf(ACC);
   if(e&&e.clash) return "같은 닉네임을 다른 친구가 먼저 쓰고 있어서 지금은 이 기기에만 저장돼요.";
+  if(e&&e.authFail) return "다른 기기에서 비밀번호가 바뀐 것 같아요. 친구 바꾸기 → 로그인으로 다시 들어와 주세요. 그동안은 이 기기에만 저장돼요.";
   if(e&&e.cloud&&!cloudRO) return "기록이 저장돼요. 다른 기기에서는 닉네임과 비밀번호로 이어서 할 수 있어요.";
   return "지금은 이 기기에만 저장돼요.";}
 function enter(k,st,isNew){ ACC=k; DEV.cur=k; saveDev(); useState(st); OB=null; adminOK=false; ptab="log"; view={tab:"home"}; gateMsg="";
   let b=0; if(isNew){S.coins+=30;b=attend(true)} else attend(); save(); render();
-  if(isNew) toast(`환영해, ${S.profile.nick}! 선물 ★ 30${b?` + 출석 ★ ${b}`:""}`); if(DB) pull() }
+  if(isNew) toast(`환영해, ${S.profile.nick}! 선물 ★ 30${b?` + 출석 ★ ${b}`:""}`); if(CLOUD_OK) pull() }
 function logout(){ if(ACC){clearTimeout(pushT); push()} ACC=null; DEV.cur=null; saveDev(); GATE="welcome"; gateMsg=""; adminOK=false; render(); window.scrollTo(0,0) }
-const wait=ms=>new Promise(r=>setTimeout(r,ms));
-const dbReady=(async()=>{ try{ const c=window.claude; if(!c||!c.use) return null;
-  const db=await Promise.race([c.use("db"),wait(10000).then(()=>null)]); if(!db) return null;
-  try{const u=await Promise.race([c.use("user"),wait(4000).then(()=>null)]); if(u){const w=await u.can("data.write"); if(w===false) cloudRO=true}}catch(e){}
-  return db }catch(e){return null} })();
-async function needDb(){ if(DB) return DB; gateMsg="연결하는 중이에요…"; render(); DB=await dbReady; gateMsg=""; return DB }
-async function nickTaken(key){ if(!DB) return false; try{return (await docOf(key).get()).exists}catch(e){return false} }
+const TAKEN="이미 다른 친구가 쓰는 닉네임이에요. 다른 닉네임을 정해 주세요.";
+async function makeEntry(nick,char,pin,st){
+  const key=keyOf(nick), e=entryOf(key)||{key}; Object.assign(e,{nick,char,cloud:false,clash:false});
+  if(await cloudReady()&&!cloudRO){ try{ const r=await CLOUD.create(nick,pin,st); if(r.err==="taken") return {err:TAKEN};
+      Object.assign(e,r.ext); e.cloud=true; delete e.lpin }
+    catch(err){ if(err&&err.code==="invalid_argument") cloudRO=true; e.lpin=pin } }
+  else e.lpin=pin;
+  if(!entryOf(key)) DEV.accts.push(e); return {e} }
 async function createAccount(nick,char,pin){
-  const key=keyOf(nick); if(entryOf(key)) return "이 기기에 이미 있는 닉네임이에요. 위 목록에서 눌러 들어가요.";
-  await needDb(); if(await nickTaken(key)) return "이미 다른 친구가 쓰는 닉네임이에요. 다른 닉네임을 정해 주세요.";
-  const e={key,nick,char,salt:newSalt(),cloud:false}; e.hash=hp(e.salt,pin);
+  if(entryOf(keyOf(nick))) return "이 기기에 이미 있는 닉네임이에요. 위 목록에서 눌러 들어가요.";
   const st=FRESH(); st.profile={nick,char}; st.updatedAt=Date.now();
-  if(DB&&!cloudRO){ try{await docOf(key).set(fullDoc(e,st)); e.cloud=true; syncState="cloud"}catch(err){ if(err&&err.code==="invalid_argument") cloudRO=true } }
-  DEV.accts.push(e); enter(key,st,true); return "" }
+  const r=await makeEntry(nick,char,pin,st); if(r.err) return r.err; enter(r.e.key,st,true); return "" }
 async function migrateLegacy(nick,pin){
-  const key=keyOf(nick); await needDb();
-  if(!entryOf(key)&&await nickTaken(key)) return "이미 다른 친구가 쓰는 닉네임이에요. 닉네임을 바꿔서 옮겨 주세요.";
-  const e=entryOf(key)||{key,nick,cloud:false}; e.nick=nick; e.char=LEGACY.profile.char; e.salt=newSalt(); e.hash=hp(e.salt,pin);
-  const st=JSON.parse(JSON.stringify(LEGACY)); st.profile.nick=nick; st.updatedAt=Date.now();
-  if(DB&&!cloudRO){ try{await docOf(key).set(fullDoc(e,st)); e.cloud=true}catch(err){ if(err&&err.code==="invalid_argument") cloudRO=true } }
-  if(!entryOf(key)) DEV.accts.push(e);
-  try{localStorage.setItem(KEY,JSON.stringify({...LEGACY,migratedTo:key}))}catch(err){} LEGACY=null;
-  enter(key,st,false); toast(`${nick}의 기록을 그대로 옮겼어요!`); return "" }
+  const st=JSON.parse(JSON.stringify(LEGACY)); st.profile.nick=nick; st.updatedAt=Date.now(); if(st.cfg) delete st.cfg.pin;
+  const r=await makeEntry(nick,LEGACY.profile.char,pin,st); if(r.err) return r.err.replace("정해 주세요","바꿔서 옮겨 주세요");
+  if(!IMPORTED){try{localStorage.setItem(KEY,JSON.stringify({...LEGACY,migratedTo:r.e.key}))}catch(err){}}
+  LEGACY=null; IMPORTED=false; enter(r.e.key,st,false); toast(`${nick}의 기록을 그대로 옮겼어요!`); return "" }
 async function login(nick,pin){
-  const db=await needDb(); if(!db) return "지금은 다른 기기 로그인을 쓸 수 없어요. 인터넷과 로그인 상태를 확인해 주세요.";
-  const key=keyOf(nick); let d; try{d=await docOf(key).get()}catch(err){return "연결이 잠깐 끊겼어요. 다시 눌러 주세요."}
-  if(!d.exists) return "그 닉네임으로 시작한 친구가 없어요. 닉네임을 다시 확인해 주세요.";
-  const b=d.data(); if(hp(b.salt,pin)!==b.hash) return "비밀번호가 달라요.";
-  let e=entryOf(key); if(!e){e={key};DEV.accts.push(e)} Object.assign(e,{nick:b.nick,char:b.char,salt:b.salt,hash:b.hash,cloud:true,clash:false});
-  try{localStorage.setItem(ckey(key),JSON.stringify(b.state))}catch(err){}
-  syncState="cloud"; enter(key,b.state,false); return "" }
+  if(!await cloudReady()) return "지금은 다른 기기 로그인을 쓸 수 없어요. 인터넷 연결을 확인해 주세요.";
+  let r; try{r=await CLOUD.login(nick,pin)}catch(err){return "연결이 잠깐 끊겼어요. 다시 눌러 주세요."}
+  if(r.err==="none") return "그 닉네임으로 시작한 친구가 없어요. 닉네임을 다시 확인해 주세요.";
+  if(r.err) return IN_CLAUDE?"비밀번호가 달라요.":"닉네임이나 비밀번호가 달라요.";
+  if(!r.state) return "기록을 찾지 못했어요. 처음 시작한 기기에서 한 번 열어 주세요.";
+  const key=keyOf(nick); let e=entryOf(key); if(!e){e={key};DEV.accts.push(e)}
+  Object.assign(e,r.ext,{nick:r.nick,char:r.char,cloud:true,clash:false,authFail:false}); delete e.lpin;
+  try{localStorage.setItem(ckey(key),JSON.stringify(r.state))}catch(err){}
+  enter(key,r.state,false); return "" }
+async function changePin(pin){ const e=entryOf(ACC); if(!e) return "계정을 찾지 못했어요.";
+  if(e.cloud&&CLOUD_OK){ try{await CLOUD.setPin(e,pin)}catch(err){return "지금은 비밀번호를 바꿀 수 없어요. 잠시 뒤 다시 해 주세요."} }
+  else e.lpin=pin;
+  saveDev(); save(); return "" }
 function cachedState(k){try{return JSON.parse(localStorage.getItem(ckey(k))||"null")}catch(e){return null}}
 
 /* ---------- 도우미 ---------- */
@@ -1021,6 +1085,8 @@ function parentLog(seg){
     </tbody></table></div><p class="note">✓ 는 통과 기준을 넘은 단계예요.</p>`:'<p class="muted">아직 푼 단원이 없어요.</p>'}</div>
    <div class="card stack"><h3>자주 틀린 문제</h3>
     ${weak.length?weak.map(([k,w])=>`<p>${fmt(findP(k).q)} <span class="note">· ${esc(UNITS[k.split("|")[0]].t)} · ${w.n}회</span></p>`).join(""):'<p class="muted">아직 기록이 없어요.</p>'}</div>
+   ${IN_CLAUDE?`<div class="card stack repair"><h3>새 주소로 옮기기</h3><p class="note">${esc(S.profile.nick)}의 별, 옷장, 학습 기록을 새 앱 주소(kkangmooksss.github.io/math-game)로 옮겨요. 아래 버튼을 누르면 새 창이 열려요. 거기서 닉네임과 비밀번호를 정하면 끝이에요. 새 주소에서는 Claude 계정 없이 링크만 있으면 누구나 쓸 수 있어요.</p>
+    <div><a class="btn" href="${exportLink()}" target="_blank" rel="noopener">새 주소로 옮기기</a></div></div>`:""}
    <div class="card stack"><h3>로그인 비밀번호 바꾸기</h3><p class="note">다른 기기에서 ${esc(S.profile.nick)}(으)로 로그인할 때 쓰는 숫자 4자리예요.</p>
     <form class="row" id="pwf"><input id="pw1" class="text" type="password" inputmode="numeric" maxlength="4" placeholder="새 비밀번호" autocomplete="new-password" style="max-width:140px"><input id="pw2" class="text" type="password" inputmode="numeric" maxlength="4" placeholder="한 번 더" autocomplete="new-password" style="max-width:140px"><button class="btn ghost sm">바꾸기</button></form><p class="note" id="pwMsg"></p></div>
    <div class="card stack"><h3>기록 초기화</h3><p class="note">${esc(S.profile.nick)}의 학습 기록, 별, 옷장을 모두 지워요. 닉네임, 캐릭터, 관리자 설정은 그대로 남아요. 되돌릴 수 없어요.</p>
@@ -1053,7 +1119,7 @@ function welcome(){
   const list=DEV.accts.filter(a=>cachedState(a.key));
   return `<div class="stack">
    <div><p class="eyebrow">비상 수학 · 4~6학년</p><h1>수학 노트</h1><p class="muted">친구마다 기록이 따로 저장돼요.</p></div>
-   ${LEGACY?`<div class="card stack repair"><p class="eyebrow">어제 하던 기록이 있어요</p>
+   ${LEGACY?`<div class="card stack repair"><p class="eyebrow">${IMPORTED?'옮겨 온 기록이 있어요':'어제 하던 기록이 있어요'}</p>
      <div class="me">${avatar(LEGACY.profile.char,LEGACY.wear||{bg:"b-grid"})}<div class="stack" style="gap:6px;min-width:0"><h2>${esc(LEGACY.profile.nick)}</h2><p><span class="coins">★ <b>${LEGACY.coins||0}</b></span> · 출석 ${LEGACY.streak||0}일째</p></div></div>
      <p>비밀번호만 정하면 지금까지의 별, 옷장, 학습 기록을 그대로 이어서 해요.</p><div><button class="btn" data-gate="migrate">비밀번호 정하고 이어하기</button></div></div>`:""}
    ${list.length?`<div class="card stack"><p class="eyebrow">이 기기에서 하던 친구</p><div class="who">${list.map(a=>{const st=cachedState(a.key);return `<div class="whorow"><button class="whobtn" data-acc="${a.key}">${avatar(st.profile?.char||a.char,st.wear||{bg:"b-grid"})}<span><b>${esc(a.nick)}</b><span class="note">★ ${st.coins||0}</span></span></button><button class="back" data-rm="${a.key}">${rmArm===a.key?'한 번 더 누르면 빼요':'목록에서 빼기'}</button></div>`}).join("")}</div>
@@ -1156,9 +1222,9 @@ function bind(){
   const mf=$("#mgf"); if(mf) mf.onsubmit=async e=>{e.preventDefault(); if(busy)return; MG.nick=$("#mgNick").value.trim().slice(0,8); const a=$("#mgPin").value.trim(), b2=$("#mgPin2").value.trim();
     if(!MG.nick){gateMsg="닉네임을 써 주세요";render();return} if(!okPin(a)){gateMsg="비밀번호는 숫자 4자리로 정해 주세요";render();return} if(a!==b2){gateMsg="두 비밀번호가 달라요";render();return}
     busy=true; gateMsg=""; const m=await migrateLegacy(MG.nick,a); busy=false; if(m){gateMsg=m;render()} };
-  const pwf=$("#pwf"); if(pwf) pwf.onsubmit=e=>{e.preventDefault(); const a=$("#pw1").value.trim(),b2=$("#pw2").value.trim(),msg=$("#pwMsg");
+  const pwf=$("#pwf"); if(pwf) pwf.onsubmit=async e=>{e.preventDefault(); const a=$("#pw1").value.trim(),b2=$("#pw2").value.trim(),msg=$("#pwMsg");
     if(!okPin(a)){msg.textContent="숫자 4자리로 정해 주세요";return} if(a!==b2){msg.textContent="두 비밀번호가 달라요";return}
-    const en=entryOf(ACC); if(!en)return; en.salt=newSalt(); en.hash=hp(en.salt,a); saveDev(); save(); $("#pw1").value="";$("#pw2").value=""; msg.textContent=""; toast("로그인 비밀번호를 바꿨어요")};
+    msg.textContent="바꾸는 중이에요…"; const m=await changePin(a); if(m){msg.textContent=m;return} $("#pw1").value="";$("#pw2").value=""; msg.textContent=""; toast("로그인 비밀번호를 바꿨어요")};
   const ed=$("[data-edit]"); if(ed) ed.onclick=()=>{OB=null;go({tab:"closet",screen:"onboard"})};
   all("[data-cat]",b=>b.onclick=()=>{shopCat=b.dataset.cat;armed=null;render()});
   all("[data-shop]",b=>b.onclick=()=>{shopCat=b.dataset.shop;armed=null;go({tab:"closet"})});
@@ -1174,7 +1240,7 @@ function bind(){
 (function boot(){
   const cur=DEV.cur&&entryOf(DEV.cur)&&cachedState(DEV.cur);
   if(cur) enter(DEV.cur,cur,false); else { GATE="welcome"; render() }
-  dbReady.then(db=>{ DB=db; if(!db) return; if(ACC) pull(); else render() });
+  cloudReady().then(ok=>{ if(!ok) return; if(ACC) pull(); else render() });
 })();
 </script>
 
