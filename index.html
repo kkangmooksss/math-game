@@ -877,7 +877,7 @@ const KEY="soeun-math-v1";
 const FRESH=()=>({prog:{},attempts:[],wrong:{},checks:{},profile:null,coins:0,owned:["b-grid","h-white"],
   wear:{outfit:null,shoes:null,head:null,face:null,bg:"b-grid",house:"h-white",furn:null,car:null,thing:null},
   cleared:{},lastIdx:null,streak:0,repair:null,solved:{},lastU:"5-2-4",daily:null,
-  cfg:{pin:null,units:{},open:{},shuffle:false,hints:true,unlockAll:false,repairCost:20,
+  cfg:{pin:null,units:{},open:{},shuffle:true,mixOn:1,hints:true,unlockAll:false,repairCost:20,
     rw:{p1:2,p2:3,p3:5,top:8,combo:5,review:3,c1:20,c2:40,c3:70,att:10,att3:15},
     priceMul:1,goal:{on:true,n:10,bonus:15},breakMin:30,gaps:[1,3,7],sound:true,hw:true,board:true}});
 let S=FRESH();
@@ -886,6 +886,7 @@ function migrate(){
   S.wear=Object.assign(F.wear,S.wear||{});
   S.owned=S.owned||[]; ["b-grid","h-white"].forEach(i=>{if(!S.owned.includes(i))S.owned.push(i)});
   S.cfg=Object.assign(F.cfg,c); S.cfg.rw=Object.assign(F.cfg.rw,c.rw||{}); S.cfg.goal=Object.assign(F.cfg.goal,c.goal||{});
+  if(!c.mixOn){S.cfg.shuffle=true;S.cfg.mixOn=1}
   S.cfg.units=c.units||{}; for(const id in S.cfg.units){const n=S.cfg.units[id].n; if(id!=="5-2-4"&&n&&n[1]==6&&n[2]==6&&n[3]==5){n[1]=8;n[2]=8;n[3]=6}} S.cfg.open=c.open||{}; if(!Array.isArray(S.cfg.gaps)||S.cfg.gaps.length!==3) S.cfg.gaps=[1,3,7];
   if(S.lastDay&&S.lastIdx==null){const d=new Date(S.lastDay);S.lastIdx=Math.floor((d.getTime()-d.getTimezoneOffset()*6e4)/DAY)}
   delete S.lastDay;
