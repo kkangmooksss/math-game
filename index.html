@@ -965,7 +965,7 @@ const FIRE_CLOUD={ auth:null, rtdb:null,
     await this.ref(cred.user.uid).set(this.body(nick,st)); return {ext:{uid:cred.user.uid,pw:this.pw(pin)}} },
   async login(nick,pin){ let cred;
     try{cred=await this.auth.signInWithEmailAndPassword(this.email(nick),this.pw(pin))}
-    catch(err){ const c=err&&err.code||""; if(/network/.test(c)) throw err; return {err:/user-not-found/.test(c)?"none":"pw"} }
+    catch(err){ const c=err&&err.code||""; if(/user-not-found/.test(c)) return {err:"none"}; if(/wrong-password|invalid-credential|invalid-login|invalid-password|invalid-email/.test(c)) return {err:"pw"}; throw err }
     const snap=await this.ref(cred.user.uid).get(), b=snap.val()||{};
     return {ext:{uid:cred.user.uid,pw:this.pw(pin)},nick:b.nick||nick,char:b.char||null,state:b.state?JSON.parse(b.state):null,updatedAt:b.updatedAt||0} },
   async get(e){ await this.ensure(e); const snap=await this.ref(e.uid).get(); if(!snap.exists()) return {exists:false};
@@ -1013,25 +1013,37 @@ function logout(){ if(ACC){clearTimeout(pushT); push()} ACC=null; DEV.cur=null; 
 const TAKEN="이미 다른 친구가 쓰는 닉네임이에요. 다른 닉네임을 정해 주세요.";
 async function makeEntry(nick,char,pin,st){
   const key=keyOf(nick), e=entryOf(key)||{key}; Object.assign(e,{nick,char,cloud:false,clash:false});
-  if(await cloudReady()&&!cloudRO){ try{ const r=await CLOUD.create(nick,pin,st); if(r.err==="taken") return {err:TAKEN};
+  let ok=false; try{ok=await within(cloudReady(),12000)}catch(err){}
+  if(ok&&!cloudRO){ try{ const r=await within(CLOUD.create(nick,pin,st),15000); if(r.err==="taken") return {err:TAKEN};
       Object.assign(e,r.ext); e.cloud=true; delete e.lpin }
-    catch(err){ if(err&&err.code==="invalid_argument") cloudRO=true; e.lpin=pin } }
+    catch(err){ if(err&&err.code==="invalid_argument") cloudRO=true; e.lpin=pin; e.why=whyMsg(err) } }
   else e.lpin=pin;
   if(!entryOf(key)) DEV.accts.push(e); return {e} }
 async function createAccount(nick,char,pin){
   if(entryOf(keyOf(nick))) return "이 기기에 이미 있는 닉네임이에요. 위 목록에서 눌러 들어가요.";
   const st=FRESH(); st.profile={nick,char}; st.updatedAt=Date.now();
-  const r=await makeEntry(nick,char,pin,st); if(r.err) return r.err; enter(r.e.key,st,true); return "" }
+  const r=await makeEntry(nick,char,pin,st); if(r.err) return r.err; enter(r.e.key,st,true);
+  if(r.e.why&&!IN_CLAUDE) setTimeout(()=>toast("클라우드에 저장하지 못했어요: "+r.e.why),2600); delete r.e.why; return "" }
 async function migrateLegacy(nick,pin){
   const st=JSON.parse(JSON.stringify(LEGACY)); st.profile.nick=nick; st.updatedAt=Date.now(); if(st.cfg) delete st.cfg.pin;
   const r=await makeEntry(nick,LEGACY.profile.char,pin,st); if(r.err) return r.err.replace("정해 주세요","바꿔서 옮겨 주세요");
   if(!IMPORTED){try{localStorage.setItem(KEY,JSON.stringify({...LEGACY,migratedTo:r.e.key}))}catch(err){}}
   LEGACY=null; IMPORTED=false; enter(r.e.key,st,false); toast(`${nick}의 기록을 그대로 옮겼어요!`); return "" }
+const within=(p,ms)=>Promise.race([p,wait(ms).then(()=>{throw {code:"timeout"}})]);
+function whyMsg(err){ const c=String(err&&(err.code||err.message)||"");
+  if(c==="timeout") return "응답이 너무 늦어요. 인터넷 연결을 확인하고 다시 눌러 주세요. (시간 초과)";
+  if(/operation-not-allowed/.test(c)) return "Firebase에서 이메일/비밀번호 로그인이 꺼져 있어요. 부모님이 Authentication → 로그인 방법에서 켜 주세요.";
+  if(/network/.test(c)) return "인터넷에 연결되지 않았어요. 연결을 확인하고 다시 눌러 주세요.";
+  if(/too-many-requests/.test(c)) return "너무 여러 번 시도했어요. 잠시 뒤 다시 해 주세요.";
+  if(/permission|PERMISSION/.test(c)) return "기록 저장소 규칙이 막고 있어요. 부모님이 Realtime Database 규칙을 확인해 주세요.";
+  if(/api-key|app-not-authorized|unauthorized-domain/.test(c)) return "이 주소에서 Firebase를 쓸 수 없게 되어 있어요. 부모님이 Firebase 설정을 확인해 주세요.";
+  return "로그인하지 못했어요. 잠시 뒤 다시 해 주세요."+(c?` (${c.slice(0,60)})`:"") }
 async function login(nick,pin){
-  if(!await cloudReady()) return "지금은 다른 기기 로그인을 쓸 수 없어요. 인터넷 연결을 확인해 주세요.";
-  let r; try{r=await CLOUD.login(nick,pin)}catch(err){return "연결이 잠깐 끊겼어요. 다시 눌러 주세요."}
+  let ok; try{ok=await within(cloudReady(),12000)}catch(err){return whyMsg(err)}
+  if(!ok) return IN_CLAUDE?"지금은 다른 기기 로그인을 쓸 수 없어요. 인터넷 연결을 확인해 주세요.":"로그인 기능을 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.";
+  let r; try{r=await within(CLOUD.login(nick,pin),15000)}catch(err){return whyMsg(err)}
   if(r.err==="none") return "그 닉네임으로 시작한 친구가 없어요. 닉네임을 다시 확인해 주세요.";
-  if(r.err) return IN_CLAUDE?"비밀번호가 달라요.":"닉네임이나 비밀번호가 달라요.";
+  if(r.err) return IN_CLAUDE?"비밀번호가 달라요.":"닉네임이나 비밀번호가 달라요. 이 주소에서 만든 계정인지도 확인해 주세요. (Claude 링크에서 만든 계정은 여기서 로그인할 수 없어요)";
   if(!r.state) return "기록을 찾지 못했어요. 처음 시작한 기기에서 한 번 열어 주세요.";
   const key=keyOf(nick); let e=entryOf(key); if(!e){e={key};DEV.accts.push(e)}
   Object.assign(e,r.ext,{nick:r.nick,char:r.char,cloud:true,clash:false,authFail:false}); delete e.lpin;
@@ -1518,7 +1530,7 @@ function loginScr(){
    <form class="card stack" id="lgf"><label for="lgNick"><b>닉네임</b></label><input id="lgNick" class="text" maxlength="8" value="${esc(LG.nick)}" autocomplete="username">
     <label for="lgPin"><b>비밀번호</b> <span class="note">숫자 4자리</span></label><input id="lgPin" class="text" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password" style="max-width:140px">
     ${gateMsg?`<p class="errmsg" role="alert">${esc(gateMsg)}</p>`:""}
-    <div><button class="btn" ${busy?'disabled':''}>들어가기</button></div></form></div>`;
+    <div><button class="btn" ${busy?'disabled':''}>${busy?'확인하는 중…':'들어가기'}</button></div></form></div>`;
 }
 function migrateScr(){
   if(!MG) MG={nick:LEGACY.profile.nick,pin:"",pin2:""};
@@ -1594,7 +1606,7 @@ function bind(){
   const og=$("#obgo"); if(og) og.onclick=async()=>{
     if(!obReady()||busy) return;
     if(ACC){ S.profile.char=OB.char; const e=entryOf(ACC); if(e){e.char=OB.char;saveDev()} OB=null; save(); go({tab:"closet"}); toast("프로필을 바꿨어요"); return }
-    busy=true; gateMsg=""; const m=await createAccount(OB.nick.trim().slice(0,8),OB.char,OB.pin); busy=false;
+    busy=true; gateMsg="계정을 만드는 중이에요…"; render(); let m; try{m=await createAccount(OB.nick.trim().slice(0,8),OB.char,OB.pin)}catch(err){m=whyMsg(err)} busy=false;
     if(m){gateMsg=m;render()} };
   const oc=$("#obcancel"); if(oc) oc.onclick=()=>{OB=null;gateMsg=""; if(ACC) go({tab:"closet"}); else {GATE="welcome";render()}};
   all("[data-gate]",b=>b.onclick=()=>{GATE=b.dataset.gate;gateMsg="";OB=null;rmArm=null;render();window.scrollTo(0,0)});
@@ -1604,10 +1616,10 @@ function bind(){
   all("[data-logout]",b=>b.onclick=logout);
   const lf=$("#lgf"); if(lf) lf.onsubmit=async e=>{e.preventDefault(); if(busy)return; LG.nick=$("#lgNick").value.trim(); const pin=$("#lgPin").value.trim();
     if(!LG.nick){gateMsg="닉네임을 써 주세요";render();return} if(!okPin(pin)){gateMsg="비밀번호는 숫자 4자리예요";render();return}
-    busy=true; gateMsg=""; const m=await login(LG.nick,pin); busy=false; if(m){gateMsg=m;render()} };
+    busy=true; gateMsg="확인하는 중이에요…"; render(); let m; try{m=await login(LG.nick,pin)}catch(err){m=whyMsg(err)} busy=false; if(m){gateMsg=m;render()} };
   const mf=$("#mgf"); if(mf) mf.onsubmit=async e=>{e.preventDefault(); if(busy)return; MG.nick=$("#mgNick").value.trim().slice(0,8); const a=$("#mgPin").value.trim(), b2=$("#mgPin2").value.trim();
     if(!MG.nick){gateMsg="닉네임을 써 주세요";render();return} if(!okPin(a)){gateMsg="비밀번호는 숫자 4자리로 정해 주세요";render();return} if(a!==b2){gateMsg="두 비밀번호가 달라요";render();return}
-    busy=true; gateMsg=""; const m=await migrateLegacy(MG.nick,a); busy=false; if(m){gateMsg=m;render()} };
+    busy=true; gateMsg="기록을 옮기는 중이에요…"; render(); let m; try{m=await migrateLegacy(MG.nick,a)}catch(err){m=whyMsg(err)} busy=false; if(m){gateMsg=m;render()} };
   const pwf=$("#pwf"); if(pwf) pwf.onsubmit=async e=>{e.preventDefault(); const a=$("#pw1").value.trim(),b2=$("#pw2").value.trim(),msg=$("#pwMsg");
     if(!okPin(a)){msg.textContent="숫자 4자리로 정해 주세요";return} if(a!==b2){msg.textContent="두 비밀번호가 달라요";return}
     msg.textContent="바꾸는 중이에요…"; const m=await changePin(a); if(m){msg.textContent=m;return} $("#pw1").value="";$("#pw2").value=""; msg.textContent=""; toast("로그인 비밀번호를 바꿨어요")};
