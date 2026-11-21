@@ -9,7 +9,7 @@
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body>
-<title>소은이 수학 노트</title>
+<title>수학 게임</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gaegu:wght@400;700&family=Gowun+Dodum&family=IBM+Plex+Mono:wght@500;600&display=swap">
@@ -1497,7 +1497,7 @@ function onboard(){
   const edit=!!ACC;
   if(!OB) OB=edit?{nick:S.profile.nick,char:S.profile.char}:{nick:"",char:null,pin:"",pin2:""};
   return `<div class="stack">
-   <div><p class="eyebrow">${edit?'프로필 바꾸기':'수학 노트'}</p><h1>${edit?'이름과 친구를 바꿔요':'반가워! 먼저 나를 소개해 줘'}</h1></div>
+   <div><p class="eyebrow">${edit?'프로필 바꾸기':'수학 게임'}</p><h1>${edit?'이름과 친구를 바꿔요':'반가워! 먼저 나를 소개해 줘'}</h1></div>
    ${edit?`<div class="card stack"><b>닉네임</b><p style="font-size:1.2rem">${esc(OB.nick)}</p><p class="note">닉네임은 로그인 이름이라 바꿀 수 없어요.</p></div>`:`<div class="card stack"><label for="nick"><b>닉네임</b> <span class="note">최대 8글자 · 다른 기기에서 로그인할 때 써요</span></label>
     <input id="nick" class="text" maxlength="8" value="${esc(OB.nick)}" placeholder="예: 소수점요정" autocomplete="off">
     <label for="pin"><b>비밀번호</b> <span class="note">숫자 4자리</span></label>
@@ -1515,7 +1515,7 @@ let LG={nick:"",pin:""}, MG=null, rmArm=null;
 function welcome(){
   const list=DEV.accts.filter(a=>cachedState(a.key));
   return `<div class="stack">
-   <div><p class="eyebrow">비상 수학 · 4~6학년</p><h1>수학 노트</h1><p class="muted">친구마다 기록이 따로 저장돼요.</p></div>
+   <div><p class="eyebrow">비상 수학 · 4~6학년</p><h1>수학 게임</h1><p class="muted">친구마다 기록이 따로 저장돼요.</p></div>
    ${LEGACY?`<div class="card stack repair"><p class="eyebrow">${IMPORTED?'옮겨 온 기록이 있어요':'어제 하던 기록이 있어요'}</p>
      <div class="me">${avatar(LEGACY.profile.char,LEGACY.wear||{bg:"b-grid"})}<div class="stack" style="gap:6px;min-width:0"><h2>${esc(LEGACY.profile.nick)}</h2><p><span class="coins">★ <b>${LEGACY.coins||0}</b></span> · 출석 ${LEGACY.streak||0}일째</p></div></div>
      <p>비밀번호만 정하면 지금까지의 별, 옷장, 학습 기록을 그대로 이어서 해요.</p><div><button class="btn" data-gate="migrate">비밀번호 정하고 이어하기</button></div></div>`:""}
